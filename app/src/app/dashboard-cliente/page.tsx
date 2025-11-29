@@ -52,44 +52,49 @@ const MetricCard = ({
   onClick,
   clickable,
   tooltip,
-}: MetricCardProps & { onClick?: () => void; clickable?: boolean; tooltip?: string }) => (
-  <div
-    className={`bg-linear-to-br from-gray-800 to-gray-900 rounded-2xl p-6 shadow-xl border border-gray-700 hover:border-gray-600 transition-all duration-300 hover:shadow-2xl transform hover:-translate-y-1 ${
-      clickable ? "cursor-pointer" : ""
-    }`}
-    onClick={onClick}
-    title={tooltip}
-  >
-    <div className="flex items-center justify-between">
-      <div>
-        <p className="text-gray-400 text-sm font-medium">{title}</p>
-        <h3 className="text-3xl font-bold text-white mt-2">{value}</h3>
-        {description && (
-          <p className="text-gray-500 text-xs mt-1">{description}</p>
-        )}
+}: MetricCardProps & { onClick?: () => void; clickable?: boolean; tooltip?: string }) => {
+  // Se não for clicável, não passamos onClick para o div
+  const cardProps = clickable ? { onClick } : {};
+  
+  return (
+    <div
+      className={`bg-linear-to-br from-gray-800 to-gray-900 rounded-2xl p-6 shadow-xl border border-gray-700 hover:border-gray-600 transition-all duration-300 hover:shadow-2xl transform hover:-translate-y-1 ${
+        clickable ? "cursor-pointer" : ""
+      }`}
+      {...cardProps}
+      title={tooltip}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-gray-400 text-sm font-medium">{title}</p>
+          <h3 className="text-3xl font-bold text-white mt-2">{value}</h3>
+          {description && (
+            <p className="text-gray-500 text-xs mt-1">{description}</p>
+          )}
+        </div>
+        <div className={`p-3 rounded-xl ${color} bg-opacity-20`}>{icon}</div>
       </div>
-      <div className={`p-3 rounded-xl ${color} bg-opacity-20`}>{icon}</div>
+      {clickable && (
+        <div className="mt-3 text-xs text-gray-400 flex items-center gap-1">
+          <span>Clique para ver detalhes</span>
+          <svg
+            className="h-3 w-3"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 5l7 7-7 7"
+            />
+          </svg>
+        </div>
+      )}
     </div>
-    {clickable && (
-      <div className="mt-3 text-xs text-gray-400 flex items-center gap-1">
-        <span>Clique para ver detalhes</span>
-        <svg
-          className="h-3 w-3"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M9 5l7 7-7 7"
-          />
-        </svg>
-      </div>
-    )}
-  </div>
-);
+  );
+};
 
 // Componente para o gráfico de barras de progresso por funcionário ou cargo
 const ProgressoPorFuncionarioChart = ({ funcionarios }: { funcionarios: any[] }) => {
@@ -824,7 +829,6 @@ export default function DashboardClientePage() {
                 color={card.color}
                 description={card.description}
                 clickable={card.clickable}
-                onClick={card.onClick}
                 tooltip={card.tooltip}
               />
             ))}

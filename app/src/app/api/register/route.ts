@@ -40,15 +40,25 @@ export async function POST(req: Request) {
           email: newEmpresa.email,
         },
       },
-      { status: 201 }, // Código HTTP 201 = criado com sucesso
+      { status: 201 }
     );
-  } catch (err: unknown) {
-    // Em caso de erro, loga no console e retorna erro 500
-    console.error("Erro no cadastro:", err);
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json(
-      { error: message || "Erro interno do servidor" },
-      { status: 500 },
-    );
+  } catch (error: unknown) {
+    // Log do erro para depuração
+    console.error("[API Register] Erro:", error);
+
+    // Trata erros específicos do Mongoose (banco de dados)
+    if (error instanceof Error && "code" in error) {
+      // Erro de chave duplicada (usuário já existe)
+      if ((error as any).code === 11000) {
+        return NextResponse.json(
+          { error: "Empresa já cadastrada com este email ou CNPJ." },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Erro genérico
+    const message = error instanceof Error ? error.message : String(error);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

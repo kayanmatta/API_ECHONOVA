@@ -7,7 +7,6 @@ if (!apiKey) {
 }
 
 const genAI = new GoogleGenerativeAI(apiKey);
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
 export class GeminiProvider implements ChatProvider {
     async sendMessage(
@@ -15,19 +14,55 @@ export class GeminiProvider implements ChatProvider {
         history: HistoryMessage[],
         initialPrompt: string
     ): Promise<IaResponse> {
+        // Configura o modelo do Google Gemini
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+        // Converte nosso formato de histórico para o formato do Google
+        const chatHistory = [
+            {
+                role: "user",
+                parts: [{ text: initialPrompt }]
+            },
+            ...history.map(msg => ({
+                role: msg.role,
+                parts: msg.parts
+            }))
+        ];
+
+        // Inicia um chat com o histórico
         const chat = model.startChat({
-            history: [
-                { role: "user", parts: [{ text: initialPrompt }] },
-                { role: "model", parts: [{ text: "Ok, entendi as regras. Pode começar." }] },
-                ...history,
-            ],
-            generationConfig: { responseMimeType: "application/json" },
+            history: chatHistory,
+            generationConfig: {
+                responseMimeType: "application/json",
+            },
         });
 
+        // Envia a nova mensagem
         const result = await chat.sendMessage(message);
-        const responseText = result.response.text();
-        console.log('Resposta bruta do Gemini:', responseText);
+        const response = await result.response;
+        const text = response.text();
 
-        return JSON.parse(responseText) as IaResponse;
+        try {
+            // Tenta parsear a resposta como JSON
+            const jsonResponse: IaResponse = JSON.parse(text);
+            return jsonResponse;
+        } catch (parseError) {
+            console.error("Erro ao parsear resposta da IA:", parseError);
+            console.error("Texto recebido:", text);
+            
+            // Retorna um erro estruturado
+            return {
+                status: "em_andamento",
+                proxima_pergunta: {
+                    texto: "Desculpe, ocorreu um erro ao processar sua resposta. Você poderia repetir?",
+                    tipo_resposta: "texto",
+                    opcoes: null,
+                    placeholder: "Sua resposta..."
+                },
+                resumo_etapa: null,
+                dados_coletados: {},
+                relatorio_final: null
+            };
+        }
     }
 }

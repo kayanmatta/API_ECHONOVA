@@ -1,7 +1,5 @@
 import mongoose from "mongoose"; // Importa o Mongoose para conectar ao MongoDB
 
-// NOTE: Do not log MONGODB_URI here to avoid leaking secrets in logs.
-
 // Pega a variável de ambiente MONGODB_URI
 const MONGODB_URI = process.env.MONGODB_URI;
 
@@ -39,10 +37,22 @@ export async function connectDB() {
     const uri = MONGODB_URI || "mongodb://localhost:27017/echonova";
     cached.promise = mongoose
       .connect(uri)
-      .then((mongoose) => mongoose);
+      .then((mongoose) => {
+        console.log("✅ MongoDB conectado com sucesso!");
+        return mongoose;
+      })
+      .catch((error) => {
+        console.error("❌ Erro ao conectar ao MongoDB:", error);
+        throw error;
+      });
   }
 
   // Espera a promise resolver e guarda a conexão no cache
-  cached.conn = await cached.promise;
-  return cached.conn;
+  try {
+    cached.conn = await cached.promise;
+    return cached.conn;
+  } catch (error) {
+    console.error("❌ Falha ao estabelecer conexão com o MongoDB:", error);
+    throw error;
+  }
 }

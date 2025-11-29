@@ -1,9 +1,7 @@
 import type { ChatProvider, IaResponse, HistoryMessage } from "./ChatProvider";
 
-const apiKey = process.env.OPENAI_API_KEY;
-if (!apiKey) {
-    throw new Error("A variável de ambiente OPENAI_API_KEY não está definida.");
-}
+// Removemos a verificação de apiKey aqui para evitar erros durante o build
+// A verificação será feita em tempo de execução
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 
@@ -13,6 +11,12 @@ export class OpenAIProvider implements ChatProvider {
         history: HistoryMessage[],
         initialPrompt: string
     ): Promise<IaResponse> {
+        // Verificar se a chave de API está definida em tempo de execução
+        const apiKey = process.env.OPENAI_API_KEY;
+        if (!apiKey) {
+            throw new Error("A variável de ambiente OPENAI_API_KEY não está definida.");
+        }
+
         // Converte nosso formato de histórico para o formato do OpenAI
         const messages = [
             { role: "system", content: initialPrompt },
@@ -38,21 +42,37 @@ export class OpenAIProvider implements ChatProvider {
         });
 
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(
-                `Erro na comunicação com a OpenAI: ${response.statusText} - ${JSON.stringify(errorData)}`
-            );
+            const errorText = await response.text();
+            throw new Error(`OpenAI API error: ${response.status} ${response.statusText} - ${errorText}`);
         }
 
-        const responseData = await response.json();
-        const responseText = responseData.choices[0]?.message?.content;
+        const data = await response.json();
         
-        console.log('Resposta bruta do OpenAI:', responseText);
-
-        if (!responseText) {
-            throw new Error("OpenAI retornou uma resposta vazia.");
+        // Verificar se a resposta tem o formato esperado
+        if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+            throw new Error("Formato de resposta inválido da API OpenAI");
         }
 
-        return JSON.parse(responseText) as IaResponse;
+        try {
+            const jsonResponse: IaResponse = JSON.parse(data.choices[0].message.content);
+            return jsonResponse;
+        } catch (parseError) {
+            console.error("Erro ao parsear resposta da OpenAI:", parseError);
+            console.error("Texto recebido:", data.choices[0].message.content);
+            
+            // Retorna um erro estruturado
+            return {
+                status: "em_andamento",
+                proxima_pergunta: {
+                    texto: "Desculpe, ocorreu um erro ao processar sua resposta. Você poderia repetir?",
+                    tipo_resposta: "texto",
+                    opcoes: null,
+                    placeholder: "Sua resposta..."
+                },
+                resumo_etapa: null,
+                dados_coletados: {},
+                relatorio_final: null
+            };
+        }
     }
 }

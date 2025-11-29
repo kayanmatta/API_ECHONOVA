@@ -33,167 +33,124 @@ export async function POST(req: NextRequest) {
     const token = cookieStore.get("auth_token")?.value;
 
     if (!token) {
-      return NextResponse.json({ error: "Não autorizado: token não encontrado." }, { status: 401 });
+      return NextResponse.json({ error: "Não autorizado." }, { status: 401 });
     }
 
-    let payload: { id?: string } | undefined;
-    try {
-      const { payload: verifiedPayload } = await jwtVerify(token, secret);
-      payload = verifiedPayload as { id?: string };
-    } catch (_err) {
-      return NextResponse.json({ error: "Não autorizado: token inválido." }, { status: 401 });
-    }
+    // Verificar e decodificar o token JWT
+    const { payload } = await jwtVerify(token, secret);
+    const empresaId = payload.id as string;
 
-    const empresaId = payload?.id;
-    if (!empresaId) {
-      return NextResponse.json({ error: "Não autorizado: token inválido." }, { status: 401 });
-    }
+    // Conectar ao banco de dados
     await connectDB();
-    const { sessionId, resposta_usuario } = await req.json();
+
+    // Buscar a empresa associada ao token
+    const empresa = await Empresa.findById(empresaId);
+    if (!empresa) {
+      return NextResponse.json({ error: "Empresa não encontrada." }, { status: 404 });
+    }
+
+    // Ler o corpo da requisição
+    const body = await req.json();
+    const { message, sessionId } = body;
+
+    // Validar entrada
+    if (!message) {
+      return NextResponse.json({ error: "Mensagem é obrigatória." }, { status: 400 });
+    }
+
+    let session;
+    let isNewSession = false;
+
+    // Se foi fornecido um ID de sessão, tentar recuperar
+    if (sessionId) {
+      session = await AiSession.findById(sessionId);
+      if (!session) {
+        return NextResponse.json({ error: "Sessão não encontrada." }, { status: 404 });
+      }
+      // Verificar se a sessão pertence à empresa correta
+      if (session.empresaId.toString() !== empresaId) {
+        return NextResponse.json({ error: "Acesso negado à sessão." }, { status: 403 });
+      }
+    } else {
+      // Criar uma nova sessão se não houver ID
+      isNewSession = true;
+      
+      // Obter todas as trilhas disponíveis para incluir no prompt
+      const todasTrilhas = await Trilha.find({}, 'nome descricao tags areasAbordadas nivel categoria metadados');
+      const trilhasFormatadas = await getTrilhasParaPrompt();
+      
+      session = new AiSession({
+        empresaId,
+        history: [],
+        initialPrompt: promptDiagnosticoAprofundado.replace('{TRILHAS_DISPONIVEIS}', trilhasFormatadas),
+      });
+    }
+
+    // Obter o provedor de IA configurado (OpenAI, Gemini, etc.)
     const provider = getChatProvider();
 
-  let session: InstanceType<typeof AiSession> | null = null;
-  let historico: HistoryMessage[] = [];
-
-    if (!sessionId) {
-      console.log(`MCP: Iniciando nova sessão para a empresa ${empresaId}`);
-      session = new AiSession({
-        empresaId: empresaId,
-        conversationHistory: [],
-      });
-      historico = [];
-    } else {
-      session = await AiSession.findById(sessionId);
-      if (!session || session.empresaId.toString() !== empresaId) {
-        return NextResponse.json({ error: "Sessão inválida ou não pertence a este usuário." }, { status: 400 });
-      }
-      historico = session.conversationHistory;
-      console.log(`MCP: Continuando sessão ${sessionId} para a empresa ${empresaId}`);
-    }
-
-    // Buscar trilhas ativas do banco de dados
-    const trilhasFormatadas = await getTrilhasParaPrompt();
-    
-    // Injetar trilhas no prompt
-    const promptComTrilhas = promptDiagnosticoAprofundado.replace(
-      "{TRILHAS_DISPONIVEIS}",
-      trilhasFormatadas
+    // Enviar a mensagem para a IA junto com o histórico
+    const iaResponse: IaResponse = await provider.sendMessage(
+      message,
+      session.history,
+      session.initialPrompt
     );
 
-    const iaResponse = await provider.sendMessage(resposta_usuario, historico, promptComTrilhas);
-    const iaTextForHistory = getTextForHistory(iaResponse);
-
-    // Validar e logar informações de progresso
-    if (iaResponse.status === "em_andamento") {
-      if (!iaResponse.progress) {
-        console.warn(`⚠️ MCP: IA não retornou 'progress' na resposta. Sessão: ${session._id}`);
-      } else {
-        console.log(`📊 MCP: Progresso - Pergunta ${iaResponse.progress.currentStep + 1}/${iaResponse.progress.totalSteps} - "${iaResponse.progress.stepTitle || 'Sem título'}" - Pergunta ${iaResponse.progress.currentQuestion || '?'}/${iaResponse.progress.totalQuestions || '?'} desta etapa`);
-      }
-      
-      // VALIDAÇÃO CRÍTICA: se status é "em_andamento", DEVE haver próxima pergunta
-      if (!iaResponse.proxima_pergunta) {
-        console.error(`❌ ERRO CRÍTICO: IA retornou status 'em_andamento' mas proxima_pergunta é null!`);
-        console.error(`❌ Dados da resposta:`, JSON.stringify(iaResponse, null, 2));
-        return NextResponse.json({ 
-          error: "Erro no fluxo do diagnóstico: IA não retornou a próxima pergunta.",
-          details: "A IA indicou que o diagnóstico deve continuar, mas não forneceu a próxima pergunta. Por favor, tente novamente."
-        }, { status: 500 });
-      }
+    // Se for uma nova sessão e a IA retornou um status iniciado, salvar no banco
+    if (isNewSession && iaResponse.status === "iniciado") {
+      await session.save();
     }
 
-    session.conversationHistory.push(
-      { role: 'user', parts: [{ text: resposta_usuario }] },
-      { role: 'model', parts: [{ text: iaTextForHistory }] }
-    );
-    await session.save();
-    
-    // --- CORREÇÃO (Fluxo Pós-Diagnóstico) ---
-    // Variável para armazenar o ID do novo diagnóstico
-    let finalDiagnosticId: string | null = null;
+    // Se for uma sessão existente, atualizar o histórico
+    if (!isNewSession) {
+      // Adicionar a nova interação ao histórico
+      session.history.push(
+        { role: "user", parts: [{ text: message }] },
+        { role: "model", parts: [{ text: getTextForHistory(iaResponse) }] }
+      );
 
-    if (iaResponse.status === "finalizado") {
-      console.log(`MCP: Finalizando e salvando diagnóstico da sessão: ${session._id}`);
-      // Alguns provedores retornam dados_coletados = null na finalização.
-      // Garantimos um objeto vazio para cumprir a validação do schema.
-      const structuredData = (iaResponse as any).dados_coletados
-        ?? (iaResponse as any).dadosColetados
-        ?? {};
-      // Garante que o relatório final nunca seja nulo ou vazio
-      const finalReport = iaResponse.relatorio_final || "Relatório não gerado. Entre em contato com o suporte.";
-      const novoDiagnostico = new DiagnosticoAprofundado({
-        empresa: new mongoose.Types.ObjectId(empresaId),
-        sessionId: session._id.toString(),
-        conversationHistory: session.conversationHistory,
-        structuredData,
-        finalReport,
-      });
-      await novoDiagnostico.save();
-      // Armazenamos o ID para retornar ao frontend
-      finalDiagnosticId = novoDiagnostico._id.toString();
-
-      // --- Associação automática de categorias e trilhas à empresa ---
-      try {
-        const empresaDoc = await Empresa.findById(empresaId);
-        if (empresaDoc) {
-          const dados = structuredData as any;
-          const trilhasRec: Array<any> = dados?.trilhas_recomendadas || dados?.trilhasRecomendadas || [];
-          const categoriasSugeridas: string[] = dados?.categorias_para_associar || dados?.categoriasParaAssociar || [];
-
-          // Buscar trilhas por nome para obter categorias e IDs
-          const trilhasEncontradas: Array<{ _id: any; categoria: string; nome: string }> = [];
-          for (const rec of trilhasRec) {
-            if (!rec?.trilha_nome && !rec?.trilhaNome) continue;
-            const nomeTrilha = rec.trilha_nome || rec.trilhaNome;
-            const trilhaDB = await Trilha.findOne({ nome: nomeTrilha }).select("_id categoria nome");
-            if (trilhaDB) {
-              trilhasEncontradas.push({ _id: trilhaDB._id, categoria: trilhaDB.categoria, nome: trilhaDB.nome });
-            }
-          }
-
-          // Consolidar categorias a associar
-          const categoriasDeTrilhas = Array.from(new Set(trilhasEncontradas.map(t => t.categoria)));
-          const todasCategorias = Array.from(new Set([...(categoriasSugeridas || []), ...categoriasDeTrilhas]));
-
-          // Adicionar categorias novas evitando duplicatas
-          const existentes = new Set((empresaDoc.categoriasAssociadas || []).map((c: any) => c.categoria));
-          for (const cat of todasCategorias) {
-            if (!existentes.has(cat)) {
-              empresaDoc.categoriasAssociadas.push({ categoria: cat, motivoAssociacao: "Recomendação da IA" });
-            }
-          }
-
-          // Adicionar trilhas associadas evitando duplicatas
-          const trilhasExistentes = new Set((empresaDoc.trilhasAssociadas || []).map((e: any) => String(e.trilha)));
-          for (const t of trilhasEncontradas) {
-            if (!trilhasExistentes.has(String(t._id))) {
-              empresaDoc.trilhasAssociadas.push({ trilha: t._id, origem: "IA", motivoAssociacao: "Recomendação da IA" });
-            }
-          }
-
-          await empresaDoc.save();
-          console.log(`MCP: Empresa ${empresaId} associada a ${todasCategorias.length} categorias e ${trilhasEncontradas.length} trilhas.`);
-        }
-      } catch (assocErr) {
-        console.warn("Associação automática de categorias/trilhas falhou:", assocErr);
+      // Se o diagnóstico foi finalizado, salvar os dados completos
+      if (iaResponse.status === "finalizado" && iaResponse.relatorio_final) {
+        const diagnostico = new DiagnosticoAprofundado({
+          empresaId,
+          sessionId: session._id,
+          dadosColetados: iaResponse.dados_coletados,
+          relatorioFinal: iaResponse.relatorio_final,
+          createdAt: new Date(),
+        });
+        await diagnostico.save();
+        
+        // Associar o diagnóstico à sessão
+        session.diagnosticoId = diagnostico._id;
       }
 
-      await AiSession.findByIdAndDelete(session._id);
-      console.log(`MCP: Sessão temporária ${session._id} removida.`);
+      // Salvar as atualizações da sessão
+      await session.save();
     }
 
-    // --- MELHORIA (Redirecionamento Pós-Diagnóstico) ---
-    // Adicionamos o `finalDiagnosticId` à resposta.
-    // O frontend usará isso para redirecionar o usuário para a página de resultados.
-    return NextResponse.json({ 
-      sessionId: session._id.toString(), 
-      finalDiagnosticId, // Retorna o ID aqui
-      ...iaResponse 
+    // Retornar a resposta da IA para o frontend
+    return NextResponse.json({
+      success: true,
+      sessionId: session._id,
+      iaResponse,
     });
 
   } catch (error: unknown) {
-    console.error("Erro no MCP (/api/diagnostico-ia):", error);
-    const errorMessage = error instanceof Error ? error.message : "Ocorreu um erro desconhecido.";
-    return NextResponse.json({ error: "Falha ao processar a requisição.", details: errorMessage }, { status: 500 });
+    console.error("Erro na API de Diagnóstico por IA:", error);
+    
+    // Tratamento específico para erros conhecidos
+    if (error instanceof mongoose.Error.ValidationError) {
+      return NextResponse.json(
+        { error: "Dados inválidos fornecidos." },
+        { status: 400 }
+      );
+    }
+
+    // Erro genérico
+    const message = error instanceof Error ? error.message : String(error);
+    return NextResponse.json(
+      { error: "Erro interno do servidor.", details: message },
+      { status: 500 }
+    );
   }
 }
