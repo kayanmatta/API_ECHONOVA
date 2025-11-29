@@ -1,19 +1,20 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { ChatProvider, IaResponse, HistoryMessage } from "./ChatProvider";
 
-const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-if (!apiKey) {
-    throw new Error("A variável de ambiente GOOGLE_GEMINI_API_KEY não está definida.");
-}
-
-const genAI = new GoogleGenerativeAI(apiKey);
-
 export class GeminiProvider implements ChatProvider {
     async sendMessage(
         message: string,
         history: HistoryMessage[],
         initialPrompt: string
     ): Promise<IaResponse> {
+        // Verificar se a chave de API está definida em tempo de execução
+        const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
+        if (!apiKey) {
+            throw new Error("A variável de ambiente GOOGLE_GEMINI_API_KEY não está definida.");
+        }
+
+        const genAI = new GoogleGenerativeAI(apiKey);
+        
         // Configura o modelo do Google Gemini
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
