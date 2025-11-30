@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import Empresa from "@/models/Empresa";
-import bcrypt from "bcryptjs"; // CORREÇÃO: Importar bcryptjs para criptografar a senha
+import bcrypt from "bcryptjs";
 
 // POST - Criar nova empresa ou retornar existente
 export async function POST(req: Request) {
@@ -38,7 +38,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // CORREÇÃO: Criar uma senha placeholder e criptografá-la
+    // Criar uma senha placeholder e criptografá-la
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(`temp_${Date.now()}`, salt); // Cria uma senha temporária única e segura
 
@@ -49,9 +49,10 @@ export async function POST(req: Request) {
       nome_empresa: perfil.empresa,
       email: perfil.email,
       cnpj: perfil.cnpj,
-      senha: hashedPassword, // CORREÇÃO: Adicionado o campo 'senha' obrigatório
+      senha: hashedPassword,
       area_atuacao: perfil.setor,
       tamanho: perfil.porte,
+      numero_funcionarios: perfil.numero_funcionarios || undefined,
     });
 
     console.log(`[API Empresas] Nova empresa criada com ID: ${novaEmpresa._id}`);
